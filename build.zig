@@ -3,6 +3,7 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const src = b.dependency("p7zip_c", .{});
 
     {
         const sevenzip = b.addModule("sevenzip", .{
@@ -15,6 +16,7 @@ pub fn build(b: *std.Build) void {
             .root_module = sevenzip,
         });
         sevenzip.addCSourceFiles(.{
+            .root = src.path(""),
             .files = &[_][]const u8{
                 "C/7zAlloc.c",
                 "C/7zBuf.c",
@@ -57,6 +59,7 @@ pub fn build(b: *std.Build) void {
             .root_module = sevenzip,
         });
         sevenzip.addCSourceFiles(.{
+            .root = src.path(""),
             .files = &(common_src ++
                 console_src ++
                 ui_common_src ++
@@ -100,7 +103,7 @@ pub fn build(b: *std.Build) void {
                 "-fno-sanitize=alignment",
             },
         });
-        sevenzip.linkSystemLibrary("oleaut32", .{});
+        // sevenzip.linkSystemLibrary("oleaut32", .{});
         b.installArtifact(exe);
     }
 }

@@ -1,7 +1,13 @@
 .{
-    .name = ._7_Zip,
+    .name = .p7zip,
     .version = "0.0.1",
+    .dependencies = .{
+        .p7zip_c = .{
+            .url = "git+https://github.com/btolab/p7zip.git?ref=16.02#f30c859433af90937723dd4e808a24c3bb836711",
+            .hash = "N-V-__8AACCvpgA3arDHbCApNGM6DW6t1So-rWX7cwo3rGWR",
+        },
+    },
     .minimum_zig_version = "0.16.0",
     .paths = .{""},
-    .fingerprint = 0x49646a571a1676a9,
+    .fingerprint = 0xef509b9ec8c6d3c2,
 }
