@@ -5,7 +5,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const src = b.dependency("p7zip_c", .{});
     {
-        const sevenzipa = b.addModule("alone", .{
+        const sevenzipa = b.addModule("sevenzipa", .{
             .target = target,
             .optimize = optimize,
             .link_libc = true,
@@ -28,7 +28,7 @@ pub fn build(b: *std.Build) void {
         inline for (SevenZipA.includes) |inc| {
             sevenzipa.addIncludePath(src.path(inc));
         }
-        inline for (LibSevenZip.defs) |def| {
+        inline for (SevenZipA.defs) |def| {
             sevenzipa.addCMacro(def[0], def[1]);
         }
 
@@ -40,7 +40,7 @@ pub fn build(b: *std.Build) void {
     }
 
     {
-        const modlibsevenzip = b.addModule("format7zfree", .{
+        const modlibsevenzip = b.addModule("libsevenzip", .{
             .target = target,
             .optimize = optimize,
             .link_libc = true,
