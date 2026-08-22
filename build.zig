@@ -12,7 +12,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    b.installArtifact(res.sevenzipa);
+    b.installArtifact(res.sevenzipz);
     // b.installArtifact(res.libsevenzip);
 
     if (b.option(bool, "ci", "enable the ci step") orelse false) {
@@ -36,7 +36,7 @@ pub fn build(b: *std.Build) void {
                 .target = ci_target,
                 .optimize = optimize,
             });
-            ci.dependOn(&ci_res.sevenzipa.step);
+            ci.dependOn(&ci_res.sevenzipz.step);
             ci.dependOn(&ci_res.libsevenzip.step);
         }
     }
@@ -50,27 +50,35 @@ pub const BuildOptions = struct {
 };
 
 pub const BuildResults = struct {
-    sevenzipa: *std.Build.Step.Compile,
+    sevenzipz: *std.Build.Step.Compile,
     libsevenzip: *std.Build.Step.Compile,
 };
 
 pub fn buildOptions(opt: BuildOptions) BuildResults {
-    const sevenzipa = blk: {
-        const sevenzipa = opt.b.createModule(.{
+    const sevenzipz = blk: {
+        const sevenzipz = opt.b.createModule(.{
             .target = opt.target,
             .optimize = opt.optimize,
             .link_libc = true,
             .link_libcpp = true,
         });
 
-        sevenzipa.addCSourceFiles(.{
+        sevenzipz.addCSourceFiles(.{
             .root = opt.src.path("C"),
-            .files = &SevenZipA.c_src,
+            .files = &SevenZipZ.c_src,
+            .flags = &.{
+                "-Werror",
+                "-Wall",
+                "-Wextra",
+                "-Weverything",
+                "-Wfatal-errors",
+                "-Wno-error=alloca",
+            },
         });
 
-        sevenzipa.addCSourceFiles(.{
+        sevenzipz.addCSourceFiles(.{
             .root = opt.src.path("CPP"),
-            .files = &SevenZipA.cpp_src,
+            .files = &SevenZipZ.cpp_src,
             .flags = &.{
                 "-Werror",
                 "-Wall",
@@ -83,56 +91,56 @@ pub fn buildOptions(opt: BuildOptions) BuildResults {
             },
         });
         inline for (Common.includes) |inc| {
-            sevenzipa.addIncludePath(opt.src.path(inc));
+            sevenzipz.addIncludePath(opt.src.path(inc));
         }
-        inline for (SevenZipA.defs) |def| {
-            sevenzipa.addCMacro(def[0], def[1]);
+        inline for (SevenZipZ.defs) |def| {
+            sevenzipz.addCMacro(def[0], def[1]);
         }
         if (opt.target.result.os.tag != .windows) {
-            sevenzipa.addCSourceFiles(.{
+            sevenzipz.addCSourceFiles(.{
                 .root = opt.src.path("CPP"),
-                .files = &SevenZipA.cpp_src_unix,
+                .files = &SevenZipZ.cpp_src_unix,
                 .flags = &.{
                     "-Wno-error=c++11-narrowing",
                     "-Wno-error=increment-bool",
                 },
             });
             inline for (Common.includes_unix) |inc| {
-                sevenzipa.addIncludePath(opt.src.path(inc));
+                sevenzipz.addIncludePath(opt.src.path(inc));
             }
             inline for (Common.defs_unix) |def| {
-                sevenzipa.addCMacro(def[0], def[1]);
+                sevenzipz.addCMacro(def[0], def[1]);
             }
         } else {
-            sevenzipa.addCSourceFiles(.{
+            sevenzipz.addCSourceFiles(.{
                 .root = opt.src.path("C"),
-                .files = &SevenZipA.c_src_win,
+                .files = &SevenZipZ.c_src_win,
                 .flags = &.{
                     "-Wno-error=c++11-narrowing",
                     "-Wno-error=increment-bool",
                 },
             });
-            sevenzipa.addCSourceFiles(.{
+            sevenzipz.addCSourceFiles(.{
                 .root = opt.src.path("CPP"),
-                .files = &SevenZipA.cpp_src_win,
+                .files = &SevenZipZ.cpp_src_win,
                 .flags = &.{
                     "-Wno-error=c++11-narrowing",
                     "-Wno-error=increment-bool",
                 },
             });
             inline for (Common.includes_win) |inc| {
-                sevenzipa.addIncludePath(opt.src.path(inc));
+                sevenzipz.addIncludePath(opt.src.path(inc));
             }
 
             inline for (Common.defs_win) |def| {
-                sevenzipa.addCMacro(def[0], def[1]);
+                sevenzipz.addCMacro(def[0], def[1]);
             }
-            sevenzipa.linkSystemLibrary("oleaut32", .{});
+            sevenzipz.linkSystemLibrary("oleaut32", .{});
         }
 
         const exe = opt.b.addExecutable(.{
             .name = "7za",
-            .root_module = sevenzipa,
+            .root_module = sevenzipz,
         });
 
         break :blk exe;
@@ -197,26 +205,17 @@ pub fn buildOptions(opt: BuildOptions) BuildResults {
     };
 
     return .{
-        .sevenzipa = sevenzipa,
+        .sevenzipz = sevenzipz,
         .libsevenzip = libsevenzip,
     };
 }
 
 const Common = struct {
-    const includes = .{
-        "CPP",
-    };
+    const includes = .{};
 
-    const includes_unix = .{
-        "CPP/include_windows",
-        "CPP/myWindows",
-    };
+    const includes_unix = .{};
 
-    const includes_win = .{
-        "CPP/Common",
-        "CPP/Windows",
-        "C",
-    };
+    const includes_win = .{};
 
     const defs_unix = .{
         .{ "ENV_UNIX", "" },
@@ -228,7 +227,7 @@ const Common = struct {
     };
 };
 
-const SevenZipA = struct {
+const SevenZipZ = struct {
     const defs = .{
         .{ "_FILE_OFFSET_BITS", "64" },
         .{ "_LARGEFILE_SOURCE", "" },
@@ -840,7 +839,5 @@ const LibSevenZip = struct {
         "Windows/TimeUtils.cpp",
     };
 
-    const cpp_src_unix = .{
-        "myWindows/wine_date_and_time.cpp",
-    };
+    const cpp_src_unix = .{};
 };
