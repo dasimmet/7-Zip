@@ -1,21 +1,29 @@
-name: Artifacts
-on: [pull_request]
+name: Continuous Integration
+
+on:
+  push:
+    branches: [main]
+
+  pull_request:
+    branches: [main]
+
+  workflow_dispatch:
+
 jobs:
   build:
-    strategy:
-      matrix:
-        arch: [x86_64]
-        os: [windows-latest]
-      fail-fast: false
-    runs-on: ${{matrix.os}}
+    runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v2
-      - uses: goto-bus-stop/setup-zig@v1
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v2.0.5
+
+      - name: Run `build`
+        run: zig build ci -Doptimize=ReleaseFast
+
+      - uses: actions/upload-artifact@v4
         with:
-          version: 0.11.0
-      - run: |
-          zig build -Dtarget=x86_64-windows -Doptimize=ReleaseSafe
-      - uses: actions/upload-artifact@v2
-        with:
-          name: upload ${{ matrix.os }}-${{ matrix.arch }}
-          path: zig-out/bin/*
+          name: 7zip.zip
+          path: zig-out/*
