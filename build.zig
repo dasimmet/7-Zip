@@ -64,29 +64,13 @@ pub fn buildOptions(opt: BuildOptions) BuildResults {
         sevenzipz.addCSourceFiles(.{
             .root = opt.src.path("C"),
             .files = &SevenZipZ.c_src,
-            .flags = &.{
-                "-Werror",
-                "-Wall",
-                "-Wextra",
-                "-Weverything",
-                "-Wfatal-errors",
-                "-Wno-error=alloca",
-            },
+            .flags = &Common.cflags,
         });
 
         sevenzipz.addCSourceFiles(.{
             .root = opt.src.path("CPP"),
             .files = &SevenZipZ.cpp_src,
-            .flags = &.{
-                "-Werror",
-                "-Wall",
-                "-Wextra",
-                "-Weverything",
-                "-Wfatal-errors",
-                "-Wno-error=alloca",
-                "-Wno-error=cast-qual",
-                "-Wno-error=disabled-macro-expansion",
-            },
+            .flags = &Common.cppflags,
         });
         inline for (Common.includes) |inc| {
             sevenzipz.addIncludePath(opt.src.path(inc));
@@ -98,10 +82,7 @@ pub fn buildOptions(opt: BuildOptions) BuildResults {
             sevenzipz.addCSourceFiles(.{
                 .root = opt.src.path("CPP"),
                 .files = &SevenZipZ.cpp_src_unix,
-                .flags = &.{
-                    "-Wno-error=c++11-narrowing",
-                    "-Wno-error=increment-bool",
-                },
+                .flags = &Common.cppflags,
             });
             inline for (Common.includes_unix) |inc| {
                 sevenzipz.addIncludePath(opt.src.path(inc));
@@ -113,18 +94,12 @@ pub fn buildOptions(opt: BuildOptions) BuildResults {
             sevenzipz.addCSourceFiles(.{
                 .root = opt.src.path("C"),
                 .files = &SevenZipZ.c_src_win,
-                .flags = &.{
-                    "-Wno-error=c++11-narrowing",
-                    "-Wno-error=increment-bool",
-                },
+                .flags = &Common.cflags,
             });
             sevenzipz.addCSourceFiles(.{
                 .root = opt.src.path("CPP"),
                 .files = &SevenZipZ.cpp_src_win,
-                .flags = &.{
-                    "-Wno-error=c++11-narrowing",
-                    "-Wno-error=increment-bool",
-                },
+                .flags = &Common.cppflags,
             });
             inline for (Common.includes_win) |inc| {
                 sevenzipz.addIncludePath(opt.src.path(inc));
@@ -162,10 +137,7 @@ pub fn buildOptions(opt: BuildOptions) BuildResults {
         modlibsevenzip.addCSourceFiles(.{
             .root = opt.src.path("CPP"),
             .files = &LibSevenZip.cpp_src,
-            .flags = &.{
-                "-Wno-error=c++11-narrowing",
-                "-Wno-error=increment-bool",
-            },
+            .flags = &Common.cppflags,
         });
         inline for (LibSevenZip.defs) |def| {
             modlibsevenzip.addCMacro(def[0], def[1]);
@@ -175,10 +147,7 @@ pub fn buildOptions(opt: BuildOptions) BuildResults {
             modlibsevenzip.addCSourceFiles(.{
                 .root = opt.src.path("CPP"),
                 .files = &LibSevenZip.cpp_src_unix,
-                .flags = &.{
-                    "-Wno-error=c++11-narrowing",
-                    "-Wno-error=increment-bool",
-                },
+                .flags = &Common.cppflags,
             });
             inline for (Common.includes_unix) |inc| {
                 modlibsevenzip.addIncludePath(opt.src.path(inc));
@@ -209,6 +178,24 @@ pub fn buildOptions(opt: BuildOptions) BuildResults {
 }
 
 const Common = struct {
+    const cflags = .{
+        "-fno-sanitize=undefined",
+    } ++ commonflags;
+
+    const commonflags = .{
+        "-Werror",
+        "-Wall",
+        "-Wextra",
+        "-Weverything",
+        "-Wfatal-errors",
+        "-Wno-error=alloca",
+    };
+
+    const cppflags = cflags ++ .{
+        "-Wno-error=cast-qual",
+        "-Wno-error=disabled-macro-expansion",
+    };
+
     const includes = .{};
 
     const includes_unix = .{};
@@ -229,7 +216,6 @@ const SevenZipZ = struct {
     const defs = .{
         .{ "_FILE_OFFSET_BITS", "64" },
         .{ "_LARGEFILE_SOURCE", "" },
-        .{ "NDEBUG", "" },
         .{ "_REENTRANT", "" },
         .{ "_7ZIP_LARGE_PAGES", "" },
         .{ "BREAK_HANDLER", "" },
