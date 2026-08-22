@@ -4,12 +4,14 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const src = b.dependency("sevenzip_src", .{});
+    const ubsan = b.option(bool, "ubsan", "force enable ubsan") orelse false;
 
     const res = buildOptions(.{
         .b = b,
         .src = src,
         .target = target,
         .optimize = optimize,
+        .ubsan = ubsan,
     });
 
     b.installArtifact(res.sevenzipz);
@@ -35,11 +37,13 @@ pub fn build(b: *std.Build) void {
             .src = src,
             .target = ci_target,
             .optimize = optimize,
+            .ubsan = ubsan,
         });
 
         const ci_install = b.addInstallArtifact(ci_res.sevenzipz, .{
             .dest_dir = .{ .override = .{ .custom = target_str } },
         });
+        ci_install.step.name = b.fmt("{s} {s}", .{ ci_install.step.name, target_str });
 
         ci.dependOn(&ci_install.step);
     }
@@ -50,6 +54,7 @@ pub const BuildOptions = struct {
     src: *std.Build.Dependency,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
+    ubsan: bool,
 };
 
 pub const BuildResults = struct {
@@ -57,6 +62,16 @@ pub const BuildResults = struct {
 };
 
 pub fn buildOptions(opt: BuildOptions) BuildResults {
+    const cppflags: []const []const u8 = if (opt.ubsan)
+        &Common.cppflags
+    else
+        &(Common.cppflags ++ Common.ubsan_flags);
+
+    const cflags: []const []const u8 = if (opt.ubsan)
+        &Common.cflags
+    else
+        &(Common.cflags ++ Common.ubsan_flags);
+
     const sevenzipz = blk: {
         const sevenzipz = opt.b.createModule(.{
             .target = opt.target,
@@ -68,13 +83,13 @@ pub fn buildOptions(opt: BuildOptions) BuildResults {
         sevenzipz.addCSourceFiles(.{
             .root = opt.src.path("C"),
             .files = &SevenZipZ.c_src,
-            .flags = &Common.cflags,
+            .flags = cflags,
         });
 
         sevenzipz.addCSourceFiles(.{
             .root = opt.src.path("CPP"),
             .files = &SevenZipZ.cpp_src,
-            .flags = &Common.cppflags,
+            .flags = cppflags,
         });
         inline for (SevenZipZ.defs) |def| {
             sevenzipz.addCMacro(def[0], def[1]);
@@ -83,7 +98,7 @@ pub fn buildOptions(opt: BuildOptions) BuildResults {
             sevenzipz.addCSourceFiles(.{
                 .root = opt.src.path("CPP"),
                 .files = &SevenZipZ.Win.cpp_src,
-                .flags = &Common.cppflags,
+                .flags = cppflags,
             });
 
             inline for (SevenZipZ.Win.defs) |def| {
@@ -106,10 +121,13 @@ pub fn buildOptions(opt: BuildOptions) BuildResults {
 }
 
 const Common = struct {
+    const ubsan_flags = .{
+        "-fno-sanitize=alignment,integer",
+    };
+
     const cflags = commonflags;
 
     const commonflags = .{
-        "-fno-sanitize=undefined",
         "-Werror",
         "-Wall",
         "-Wextra",
