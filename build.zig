@@ -15,30 +15,28 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(res.sevenzipz);
     // b.installArtifact(res.libsevenzip);
 
-    if (b.option(bool, "ci", "enable the ci step") orelse false) {
-        const ci = b.step("ci", "ci target");
-        inline for (&.{
-            "x86_64-linux-musl",
-            "x86_64-linux-gnu",
-            "aarch64-linux-musl",
-            "aarch64-linux-gnu",
-            "x86_64-macos-none",
-            "aarch64-macos-none",
-        }) |target_str| {
-            const parsed_query = std.Build.parseTargetQuery(.{
-                .arch_os_abi = target_str,
-            }) catch @panic("invalid target query");
+    const ci = b.step("ci", "ci target");
+    inline for (&.{
+        "x86_64-linux-musl",
+        "x86_64-linux-gnu",
+        "aarch64-linux-musl",
+        "aarch64-linux-gnu",
+        "x86_64-macos-none",
+        "aarch64-macos-none",
+    }) |target_str| {
+        const parsed_query = std.Build.parseTargetQuery(.{
+            .arch_os_abi = target_str,
+        }) catch @panic("invalid target query");
 
-            const ci_target = b.resolveTargetQuery(parsed_query);
-            const ci_res = buildOptions(.{
-                .b = b,
-                .src = src,
-                .target = ci_target,
-                .optimize = optimize,
-            });
-            ci.dependOn(&ci_res.sevenzipz.step);
-            ci.dependOn(&ci_res.libsevenzip.step);
-        }
+        const ci_target = b.resolveTargetQuery(parsed_query);
+        const ci_res = buildOptions(.{
+            .b = b,
+            .src = src,
+            .target = ci_target,
+            .optimize = optimize,
+        });
+        ci.dependOn(&ci_res.sevenzipz.step);
+        ci.dependOn(&ci_res.libsevenzip.step);
     }
 }
 
