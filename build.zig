@@ -26,7 +26,7 @@ pub fn build(b: *std.Build) void {
     }) |target_str| {
         const parsed_query = std.Build.parseTargetQuery(.{
             .arch_os_abi = target_str,
-        }) catch @panic("invalid target query");
+        }) catch @panic("invalid target query: " ++ target_str);
 
         const ci_target = b.resolveTargetQuery(parsed_query);
         const ci_res = buildOptions(.{
@@ -137,7 +137,7 @@ pub fn buildOptions(opt: BuildOptions) BuildResults {
         }
 
         const exe = opt.b.addExecutable(.{
-            .name = "7za",
+            .name = "7zz",
             .root_module = sevenzipz,
         });
 
