@@ -36,7 +36,12 @@ pub fn build(b: *std.Build) void {
             .target = ci_target,
             .optimize = optimize,
         });
-        ci.dependOn(&ci_res.sevenzipz.step);
+
+        const ci_install = b.addInstallArtifact(ci_res.sevenzipz, .{
+            .dest_dir = .{ .override = .{ .custom = target_str } },
+        });
+
+        ci.dependOn(&ci_install.step);
     }
 }
 
