@@ -5,6 +5,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const src = b.dependency("sevenzip_src", .{});
     const ubsan = b.option(bool, "ubsan", "force enable ubsan") orelse false;
+    const strip = b.option(bool, "strip", "strip debug symbols");
     const linkage: std.builtin.LinkMode = b.option(
         std.builtin.LinkMode,
         "linkage",
@@ -17,6 +18,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .ubsan = ubsan,
+        .strip = strip,
         .linkage = linkage,
     });
 
@@ -37,6 +39,31 @@ pub fn build(b: *std.Build) void {
         },
     });
     b.getInstallStep().dependOn(&install_so.step);
+
+    const install_sfx_con = b.addInstallArtifact(res.sfx_con, .{
+        .dest_dir = .{ .override = .bin },
+        .dest_sub_path = "7zCon.sfx",
+    });
+    b.getInstallStep().dependOn(&install_sfx_con.step);
+
+    if (res.sfx_s2) |s2| {
+        const install_s2 = b.addInstallArtifact(s2, .{
+            .dest_dir = .{ .override = .bin },
+            .dest_sub_path = "7zS2.sfx",
+        });
+        b.getInstallStep().dependOn(&install_s2.step);
+    }
+
+    if (res.sfx_s2con) |s2con| {
+        const install_s2con = b.addInstallArtifact(s2con, .{
+            .dest_dir = .{ .override = .bin },
+            .dest_sub_path = "7zS2con.sfx",
+        });
+        b.getInstallStep().dependOn(&install_s2con.step);
+    }
+
+    const sfx = b.step("sfx", "build sfx modules");
+    sfx.dependOn(&install_sfx_con.step);
 
     const ci = b.step("ci", "ci target");
     inline for (&.{
@@ -97,6 +124,25 @@ pub fn build(b: *std.Build) void {
                 }),
             );
 
+            _ = ci_wf.addCopyFile(
+                ci_res.sfx_con.getEmittedBin(),
+                b.fmt("{s}/bin/7zCon.sfx", .{arc_base}),
+            );
+
+            if (ci_res.sfx_s2) |s2| {
+                _ = ci_wf.addCopyFile(
+                    s2.getEmittedBin(),
+                    b.fmt("{s}/bin/7zS2.sfx", .{arc_base}),
+                );
+            }
+
+            if (ci_res.sfx_s2con) |s2con| {
+                _ = ci_wf.addCopyFile(
+                    s2con.getEmittedBin(),
+                    b.fmt("{s}/bin/7zS2con.sfx", .{arc_base}),
+                );
+            }
+
             const run = b.addRunArtifact(res.exe);
             run.addArg("a");
             run.addArg("-tzip");
@@ -122,11 +168,15 @@ pub const BuildOptions = struct {
     optimize: std.builtin.OptimizeMode,
     ubsan: bool,
     linkage: std.builtin.LinkMode,
+    strip: ?bool = null,
 };
 
 pub const BuildResults = struct {
     exe: *std.Build.Step.Compile,
     libsevenzip: *std.Build.Step.Compile,
+    sfx_con: *std.Build.Step.Compile,
+    sfx_s2: ?*std.Build.Step.Compile = null,
+    sfx_s2con: ?*std.Build.Step.Compile = null,
 };
 
 pub fn buildOptions(opt: BuildOptions) BuildResults {
@@ -146,6 +196,7 @@ pub fn buildOptions(opt: BuildOptions) BuildResults {
             .optimize = opt.optimize,
             .link_libc = true,
             .link_libcpp = true,
+            .strip = opt.strip,
         });
 
         mod.addCSourceFiles(.{
@@ -196,6 +247,7 @@ pub fn buildOptions(opt: BuildOptions) BuildResults {
             .optimize = opt.optimize,
             .link_libc = true,
             .link_libcpp = true,
+            .strip = opt.strip,
         });
 
         if (opt.linkage == .dynamic) {
@@ -276,9 +328,141 @@ pub fn buildOptions(opt: BuildOptions) BuildResults {
         }
     };
 
+    const sfx_con = blk: {
+        const mod = opt.b.createModule(.{
+            .target = opt.target,
+            .optimize = opt.optimize,
+            .link_libc = true,
+            .link_libcpp = true,
+            .strip = opt.strip orelse true,
+        });
+
+        mod.addCSourceFiles(.{
+            .root = opt.src.path("C"),
+            .files = &SfxCon.c_src,
+            .flags = cflags,
+        });
+
+        mod.addCSourceFiles(.{
+            .root = opt.src.path("CPP"),
+            .files = &SfxCon.cpp_src,
+            .flags = cppflags,
+        });
+
+        inline for (SfxCon.defs) |def| {
+            mod.addCMacro(def[0], def[1]);
+        }
+
+        if (opt.target.result.os.tag == .windows) {
+            mod.addCSourceFiles(.{
+                .root = opt.src.path("C"),
+                .files = &SfxCon.Win.c_src,
+                .flags = cflags,
+            });
+
+            mod.addCSourceFiles(.{
+                .root = opt.src.path("CPP"),
+                .files = &SfxCon.Win.cpp_src,
+                .flags = cppflags,
+            });
+
+            inline for (SfxCon.Win.defs) |def| {
+                mod.addCMacro(def[0], def[1]);
+            }
+
+            mod.addWin32ResourceFile(.{
+                .file = opt.src.path("CPP/7zip/Bundles/SFXCon/resource.rc"),
+            });
+
+            mod.linkSystemLibrary("oleaut32", .{});
+        }
+
+        const sfx_exe = opt.b.addExecutable(.{
+            .name = "7zCon.sfx",
+            .root_module = mod,
+        });
+
+        break :blk sfx_exe;
+    };
+
+    const sfx_s2 = if (opt.target.result.os.tag == .windows) blk: {
+        const s2_cflags: []const []const u8 = if (opt.ubsan)
+            &(Common.cflags ++ Common.ubsan_flags ++ SfxS2.cflags)
+        else
+            &(Common.cflags ++ SfxS2.cflags);
+
+        const mod = opt.b.createModule(.{
+            .target = opt.target,
+            .optimize = opt.optimize,
+            .link_libc = true,
+            .strip = opt.strip orelse true,
+        });
+
+        mod.addCSourceFiles(.{
+            .root = opt.src.path("C"),
+            .files = &SfxS2.c_src,
+            .flags = s2_cflags,
+        });
+
+        inline for (SfxS2.defs) |def| {
+            mod.addCMacro(def[0], def[1]);
+        }
+
+        mod.addWin32ResourceFile(.{
+            .file = opt.src.path("C/Util/SfxSetup/resource.rc"),
+        });
+
+        const s2_exe = opt.b.addExecutable(.{
+            .name = "7zS2.sfx",
+            .root_module = mod,
+        });
+        s2_exe.subsystem = .windows;
+
+        break :blk s2_exe;
+    } else null;
+
+    const sfx_s2con = if (opt.target.result.os.tag == .windows) blk: {
+        const s2_cflags: []const []const u8 = if (opt.ubsan)
+            &(Common.cflags ++ Common.ubsan_flags ++ SfxS2.cflags)
+        else
+            &(Common.cflags ++ SfxS2.cflags);
+
+        const mod = opt.b.createModule(.{
+            .target = opt.target,
+            .optimize = opt.optimize,
+            .link_libc = true,
+            .strip = opt.strip orelse true,
+        });
+
+        mod.addCSourceFiles(.{
+            .root = opt.src.path("C"),
+            .files = &SfxS2.c_src,
+            .flags = s2_cflags,
+        });
+
+        inline for (SfxS2.defs ++ .{.{ "_CONSOLE", "" }}) |def| {
+            mod.addCMacro(def[0], def[1]);
+        }
+
+        mod.addWin32ResourceFile(.{
+            .file = opt.src.path("C/Util/SfxSetup/resource.rc"),
+        });
+
+        const s2con_exe = opt.b.addExecutable(.{
+            .name = "7zS2con.sfx",
+            .root_module = mod,
+        });
+        s2con_exe.subsystem = .console;
+
+        break :blk s2con_exe;
+    } else null;
+
     return .{
         .exe = exe,
         .libsevenzip = libsevenzip,
+        .sfx_con = sfx_con,
+        .sfx_s2 = sfx_s2,
+        .sfx_s2con = sfx_s2con,
     };
 }
 
@@ -306,17 +490,83 @@ const Common = struct {
         "-Wno-strict-prototypes",
         "-Wno-unused-macros",
     };
-    const core_cpp_src = .{
+
+    const sfx_s2_core_c_src = .{
+        "7zCrc.c",
+        "7zCrcOpt.c",
+        "CpuArch.c",
+    };
+
+    const core_c_src = sfx_s2_core_c_src ++ .{
+        "Alloc.c",
+        "Threads.c",
+    };
+
+    const sfx_s2_dec_c_src = .{
+        "7zStream.c",
+        "Bcj2.c",
+        "Bra.c",
+        "Bra86.c",
+        "BraIA64.c",
+        "Delta.c",
+        "Lzma2Dec.c",
+        "LzmaDec.c",
+    };
+
+    const sfx_c_src = sfx_s2_dec_c_src ++ .{
+        "Aes.c",
+        "AesOpt.c",
+        "Lzma2DecMt.c",
+        "MtDec.c",
+        "Ppmd7.c",
+        "Ppmd7Dec.c",
+        "Sha256.c",
+        "Sha256Opt.c",
+    };
+
+    const codecs_c_src = .{
+        "7zBuf2.c",
+        "Bcj2Enc.c",
+        "Blake2s.c",
+        "BwtSort.c",
+        "HuffEnc.c",
+        "LzFind.c",
+        "LzFindMt.c",
+        "LzFindOpt.c",
+        "Lzma2Enc.c",
+        "LzmaEnc.c",
+        "Md5.c",
+        "MtCoder.c",
+        "Ppmd7Enc.c",
+        "Ppmd7aDec.c",
+        "Ppmd8.c",
+        "Ppmd8Dec.c",
+        "Ppmd8Enc.c",
+        "Sha1.c",
+        "Sha1Opt.c",
+        "Sha3.c",
+        "Sha512.c",
+        "Sha512Opt.c",
+        "Sort.c",
+        "SwapBytes.c",
+        "Xxh64.c",
+        "Xz.c",
+        "XzCrc64.c",
+        "XzCrc64Opt.c",
+        "XzDec.c",
+        "XzEnc.c",
+        "XzIn.c",
+        "ZstdDec.c",
+    };
+
+    const sfx_core_cpp_src = .{
         "Windows/Synchronization.cpp",
         "Common/CRC.cpp",
-        "Common/CrcReg.cpp",
-        "Common/DynLimBuf.cpp",
         "Common/IntToString.cpp",
         "Common/MyString.cpp",
         "Common/MyVector.cpp",
         "Common/NewHandler.cpp",
         "Common/StringConvert.cpp",
-        "Common/StringToInt.cpp",
         "Common/UTFConvert.cpp",
         "Common/Wildcard.cpp",
         "Windows/FileDir.cpp",
@@ -330,36 +580,47 @@ const Common = struct {
         "7zip/Common/CreateCoder.cpp",
         "7zip/Common/CWrappers.cpp",
         "7zip/Common/InBuffer.cpp",
-        "7zip/Common/InOutTempBuffer.cpp",
         "7zip/Common/FilterCoder.cpp",
         "7zip/Common/LimitedStreams.cpp",
-        "7zip/Common/MethodId.cpp",
-        "7zip/Common/MethodProps.cpp",
-        "7zip/Common/OffsetStream.cpp",
         "7zip/Common/OutBuffer.cpp",
         "7zip/Common/ProgressUtils.cpp",
         "7zip/Common/PropId.cpp",
         "7zip/Common/StreamObjects.cpp",
         "7zip/Common/StreamUtils.cpp",
-        "7zip/Common/UniqBlocks.cpp",
         "7zip/Archive/Common/ItemNameUtils.cpp",
         "7zip/Compress/CopyCoder.cpp",
         "Common/MyWindows.cpp",
     };
 
-    const codecs_common_cpp_src = .{
+    const core_extra_cpp_src = .{
+        "Common/CrcReg.cpp",
+        "Common/DynLimBuf.cpp",
+        "Common/StringToInt.cpp",
+        "7zip/Common/InOutTempBuffer.cpp",
+        "7zip/Common/MethodId.cpp",
+        "7zip/Common/MethodProps.cpp",
+        "7zip/Common/OffsetStream.cpp",
+        "7zip/Common/UniqBlocks.cpp",
+    };
+
+    const core_cpp_src = sfx_core_cpp_src ++ core_extra_cpp_src;
+
+    const sfx_codecs_common_cpp_src = .{
+        "7zip/Common/StreamBinder.cpp",
+        "7zip/Common/VirtThread.cpp",
+        "Common/Sha256Prepare.cpp",
+    };
+
+    const codecs_common_extra_cpp_src = .{
         "7zip/Common/MemBlocks.cpp",
         "7zip/Common/OutMemStream.cpp",
         "7zip/Common/ProgressMt.cpp",
-        "7zip/Common/StreamBinder.cpp",
-        "7zip/Common/VirtThread.cpp",
         "Common/LzFindPrepare.cpp",
         "Common/Md5Reg.cpp",
         "Common/MyMap.cpp",
         "Common/MyXml.cpp",
         "Common/Sha1Prepare.cpp",
         "Common/Sha1Reg.cpp",
-        "Common/Sha256Prepare.cpp",
         "Common/Sha256Reg.cpp",
         "Common/Sha3Reg.cpp",
         "Common/Sha512Prepare.cpp",
@@ -371,7 +632,21 @@ const Common = struct {
         "7zip/Common/LockedStream.cpp",
     };
 
-    const archive_cpp_src = .{
+    const codecs_common_cpp_src = sfx_codecs_common_cpp_src ++ codecs_common_extra_cpp_src;
+
+    const sfx_archive_cpp_src = .{
+        "7zip/Archive/SplitHandler.cpp",
+        "7zip/Archive/Common/CoderMixer2.cpp",
+        "7zip/Archive/Common/MultiStream.cpp",
+        "7zip/Archive/Common/OutStreamWithCRC.cpp",
+        "7zip/Archive/7z/7zDecode.cpp",
+        "7zip/Archive/7z/7zExtract.cpp",
+        "7zip/Archive/7z/7zHandler.cpp",
+        "7zip/Archive/7z/7zIn.cpp",
+        "7zip/Archive/7z/7zRegister.cpp",
+    };
+
+    const archive_extra_cpp_src = .{
         "7zip/Archive/ApfsHandler.cpp",
         "7zip/Archive/ApmHandler.cpp",
         "7zip/Archive/ArHandler.cpp",
@@ -405,7 +680,6 @@ const Common = struct {
         "7zip/Archive/QcowHandler.cpp",
         "7zip/Archive/RpmHandler.cpp",
         "7zip/Archive/SparseHandler.cpp",
-        "7zip/Archive/SplitHandler.cpp",
         "7zip/Archive/SquashfsHandler.cpp",
         "7zip/Archive/SwfHandler.cpp",
         "7zip/Archive/UefiHandler.cpp",
@@ -417,29 +691,21 @@ const Common = struct {
         "7zip/Archive/XzHandler.cpp",
         "7zip/Archive/ZHandler.cpp",
         "7zip/Archive/ZstdHandler.cpp",
-        "7zip/Archive/Common/CoderMixer2.cpp",
         "7zip/Archive/Common/DummyOutStream.cpp",
         "7zip/Archive/Common/FindSignature.cpp",
         "7zip/Archive/Common/InStreamWithCRC.cpp",
-        "7zip/Archive/Common/MultiStream.cpp",
-        "7zip/Archive/Common/OutStreamWithCRC.cpp",
         "7zip/Archive/Common/OutStreamWithSha1.cpp",
         "7zip/Archive/Common/HandlerOut.cpp",
         "7zip/Archive/Common/ParseProperties.cpp",
         "7zip/Archive/7z/7zCompressionMode.cpp",
-        "7zip/Archive/7z/7zDecode.cpp",
         "7zip/Archive/7z/7zEncode.cpp",
-        "7zip/Archive/7z/7zExtract.cpp",
         "7zip/Archive/7z/7zFolderInStream.cpp",
-        "7zip/Archive/7z/7zHandler.cpp",
         "7zip/Archive/7z/7zHandlerOut.cpp",
         "7zip/Archive/7z/7zHeader.cpp",
-        "7zip/Archive/7z/7zIn.cpp",
         "7zip/Archive/7z/7zOut.cpp",
         "7zip/Archive/7z/7zProperties.cpp",
         "7zip/Archive/7z/7zSpecStream.cpp",
         "7zip/Archive/7z/7zUpdate.cpp",
-        "7zip/Archive/7z/7zRegister.cpp",
         "7zip/Archive/Cab/CabBlockInStream.cpp",
         "7zip/Archive/Cab/CabHandler.cpp",
         "7zip/Archive/Cab/CabHeader.cpp",
@@ -480,40 +746,45 @@ const Common = struct {
         "7zip/Archive/Zip/ZipRegister.cpp",
     };
 
-    const compress_cpp_src = .{
+    const archive_cpp_src = sfx_archive_cpp_src ++ archive_extra_cpp_src;
+
+    const sfx_compress_cpp_src = .{
         "7zip/Compress/Bcj2Coder.cpp",
         "7zip/Compress/Bcj2Register.cpp",
         "7zip/Compress/BcjCoder.cpp",
         "7zip/Compress/BcjRegister.cpp",
-        "7zip/Compress/BitlDecoder.cpp",
         "7zip/Compress/BranchMisc.cpp",
         "7zip/Compress/BranchRegister.cpp",
+        "7zip/Compress/CopyRegister.cpp",
+        "7zip/Compress/DeltaFilter.cpp",
+        "7zip/Compress/Lzma2Decoder.cpp",
+        "7zip/Compress/Lzma2Register.cpp",
+        "7zip/Compress/LzmaDecoder.cpp",
+        "7zip/Compress/LzmaRegister.cpp",
+        "7zip/Compress/PpmdDecoder.cpp",
+        "7zip/Compress/PpmdRegister.cpp",
+    };
+
+    const compress_extra_cpp_src = .{
+        "7zip/Compress/BitlDecoder.cpp",
         "7zip/Compress/ByteSwap.cpp",
         "7zip/Compress/BZip2Crc.cpp",
         "7zip/Compress/BZip2Decoder.cpp",
         "7zip/Compress/BZip2Encoder.cpp",
         "7zip/Compress/BZip2Register.cpp",
-        "7zip/Compress/CopyRegister.cpp",
         "7zip/Compress/Deflate64Register.cpp",
         "7zip/Compress/DeflateDecoder.cpp",
         "7zip/Compress/DeflateEncoder.cpp",
         "7zip/Compress/DeflateRegister.cpp",
-        "7zip/Compress/DeltaFilter.cpp",
         "7zip/Compress/ImplodeDecoder.cpp",
         "7zip/Compress/LzfseDecoder.cpp",
         "7zip/Compress/LzhDecoder.cpp",
-        "7zip/Compress/Lzma2Decoder.cpp",
         "7zip/Compress/Lzma2Encoder.cpp",
-        "7zip/Compress/Lzma2Register.cpp",
-        "7zip/Compress/LzmaDecoder.cpp",
         "7zip/Compress/LzmaEncoder.cpp",
-        "7zip/Compress/LzmaRegister.cpp",
         "7zip/Compress/LzmsDecoder.cpp",
         "7zip/Compress/LzOutWindow.cpp",
         "7zip/Compress/LzxDecoder.cpp",
-        "7zip/Compress/PpmdDecoder.cpp",
         "7zip/Compress/PpmdEncoder.cpp",
-        "7zip/Compress/PpmdRegister.cpp",
         "7zip/Compress/PpmdZip.cpp",
         "7zip/Compress/QuantumDecoder.cpp",
         "7zip/Compress/ShrinkDecoder.cpp",
@@ -532,12 +803,17 @@ const Common = struct {
         "7zip/Compress/RarCodecsRegister.cpp",
     };
 
-    const crypto_cpp_src = .{
+    const compress_cpp_src = sfx_compress_cpp_src ++ compress_extra_cpp_src;
+
+    const sfx_crypto_cpp_src = .{
         "7zip/Crypto/7zAes.cpp",
         "7zip/Crypto/7zAesRegister.cpp",
+        "7zip/Crypto/MyAes.cpp",
+    };
+
+    const crypto_extra_cpp_src = .{
         "7zip/Crypto/HmacSha1.cpp",
         "7zip/Crypto/HmacSha256.cpp",
-        "7zip/Crypto/MyAes.cpp",
         "7zip/Crypto/MyAesReg.cpp",
         "7zip/Crypto/Pbkdf2HmacSha1.cpp",
         "7zip/Crypto/RandGen.cpp",
@@ -549,31 +825,45 @@ const Common = struct {
         "7zip/Crypto/RarAes.cpp",
     };
 
+    const crypto_cpp_src = sfx_crypto_cpp_src ++ crypto_extra_cpp_src;
+
+    const sfx_codecs_cpp_src = sfx_codecs_common_cpp_src ++ sfx_archive_cpp_src ++ sfx_compress_cpp_src ++ sfx_crypto_cpp_src;
+
     const codecs_cpp_src = codecs_common_cpp_src ++ archive_cpp_src ++ compress_cpp_src ++ crypto_cpp_src;
 
-    const ui_cpp_src = .{
+    const ui_extract_cpp_src = .{
         "Common/CommandLineParser.cpp",
-        "Common/ListFileUtils.cpp",
         "Common/StdInStream.cpp",
         "Common/StdOutStream.cpp",
         "Windows/ErrorMsg.cpp",
-        "Windows/FileLink.cpp",
-        "Windows/SystemInfo.cpp",
         "7zip/Common/FilePathAutoRename.cpp",
         "7zip/Common/FileStreams.cpp",
-        "7zip/Common/MultiOutStream.cpp",
-        "7zip/UI/Common/ArchiveCommandLine.cpp",
         "7zip/UI/Common/ArchiveExtractCallback.cpp",
         "7zip/UI/Common/ArchiveOpenCallback.cpp",
-        "7zip/UI/Common/Bench.cpp",
         "7zip/UI/Common/DefaultName.cpp",
-        "7zip/UI/Common/EnumDirItems.cpp",
         "7zip/UI/Common/Extract.cpp",
         "7zip/UI/Common/ExtractingFilePath.cpp",
-        "7zip/UI/Common/HashCalc.cpp",
         "7zip/UI/Common/LoadCodecs.cpp",
         "7zip/UI/Common/OpenArchive.cpp",
         "7zip/UI/Common/PropIDUtils.cpp",
+        "7zip/UI/Console/ConsoleClose.cpp",
+        "7zip/UI/Console/ExtractCallbackConsole.cpp",
+        "7zip/UI/Console/List.cpp",
+        "7zip/UI/Console/MainAr.cpp",
+        "7zip/UI/Console/OpenCallbackConsole.cpp",
+        "7zip/UI/Console/PercentPrinter.cpp",
+        "7zip/UI/Console/UserInputUtils.cpp",
+    };
+
+    const ui_extra_cpp_src = .{
+        "Common/ListFileUtils.cpp",
+        "Windows/FileLink.cpp",
+        "Windows/SystemInfo.cpp",
+        "7zip/Common/MultiOutStream.cpp",
+        "7zip/UI/Common/ArchiveCommandLine.cpp",
+        "7zip/UI/Common/Bench.cpp",
+        "7zip/UI/Common/EnumDirItems.cpp",
+        "7zip/UI/Common/HashCalc.cpp",
         "7zip/UI/Common/SetProperties.cpp",
         "7zip/UI/Common/SortUtils.cpp",
         "7zip/UI/Common/TempFiles.cpp",
@@ -583,19 +873,18 @@ const Common = struct {
         "7zip/UI/Common/UpdatePair.cpp",
         "7zip/UI/Common/UpdateProduce.cpp",
         "7zip/UI/Console/BenchCon.cpp",
-        "7zip/UI/Console/ConsoleClose.cpp",
-        "7zip/UI/Console/ExtractCallbackConsole.cpp",
         "7zip/UI/Console/HashCon.cpp",
-        "7zip/UI/Console/List.cpp",
         "7zip/UI/Console/Main.cpp",
-        "7zip/UI/Console/MainAr.cpp",
-        "7zip/UI/Console/OpenCallbackConsole.cpp",
-        "7zip/UI/Console/PercentPrinter.cpp",
         "7zip/UI/Console/UpdateCallbackConsole.cpp",
-        "7zip/UI/Console/UserInputUtils.cpp",
     };
 
+    const ui_cpp_src = ui_extract_cpp_src ++ ui_extra_cpp_src;
+
     pub const Win = struct {
+        const c_src = .{
+            "DllSecur.c",
+        };
+
         const cpp_src = .{
             "Windows/Registry.cpp",
             "Windows/SecurityUtils.cpp",
@@ -619,60 +908,7 @@ const SevenZipZ = struct {
         .{ "_UNICODE", "" },
     };
 
-    const c_src = .{
-        "7zBuf2.c",
-        "7zCrc.c",
-        "7zCrcOpt.c",
-        "7zStream.c",
-        "Aes.c",
-        "AesOpt.c",
-        "Alloc.c",
-        "Bcj2.c",
-        "Bcj2Enc.c",
-        "Blake2s.c",
-        "Bra.c",
-        "Bra86.c",
-        "BraIA64.c",
-        "BwtSort.c",
-        "CpuArch.c",
-        "Delta.c",
-        "HuffEnc.c",
-        "LzFind.c",
-        "Lzma2Dec.c",
-        "Lzma2DecMt.c",
-        "Lzma2Enc.c",
-        "LzmaDec.c",
-        "LzmaEnc.c",
-        "Md5.c",
-        "MtCoder.c",
-        "MtDec.c",
-        "Ppmd7.c",
-        "Ppmd7Dec.c",
-        "Ppmd7aDec.c",
-        "Ppmd7Enc.c",
-        "Ppmd8.c",
-        "Ppmd8Dec.c",
-        "Ppmd8Enc.c",
-        "Sha1.c",
-        "Sha1Opt.c",
-        "Sha256.c",
-        "Sha256Opt.c",
-        "Sha3.c",
-        "Sha512.c",
-        "Sha512Opt.c",
-        "Sort.c",
-        "SwapBytes.c",
-        "Xxh64.c",
-        "Xz.c",
-        "XzDec.c",
-        "XzEnc.c",
-        "XzIn.c",
-        "XzCrc64.c",
-        "XzCrc64Opt.c",
-        "ZstdDec.c",
-        "LzFindMt.c",
-        "LzFindOpt.c",
-        "Threads.c",
+    const c_src = Common.core_c_src ++ Common.sfx_c_src ++ Common.codecs_c_src ++ .{
         "DllSecur.c",
     };
 
@@ -700,61 +936,7 @@ const Lib7zip = struct {
         .{ "_UNICODE", "" },
     };
 
-    const c_src = .{
-        "7zBuf2.c",
-        "7zCrc.c",
-        "7zCrcOpt.c",
-        "7zStream.c",
-        "Aes.c",
-        "AesOpt.c",
-        "Alloc.c",
-        "Bcj2.c",
-        "Bcj2Enc.c",
-        "Blake2s.c",
-        "Bra.c",
-        "Bra86.c",
-        "BraIA64.c",
-        "BwtSort.c",
-        "CpuArch.c",
-        "Delta.c",
-        "HuffEnc.c",
-        "LzFind.c",
-        "Lzma2Dec.c",
-        "Lzma2DecMt.c",
-        "Lzma2Enc.c",
-        "LzmaDec.c",
-        "LzmaEnc.c",
-        "Md5.c",
-        "MtCoder.c",
-        "MtDec.c",
-        "Ppmd7.c",
-        "Ppmd7Dec.c",
-        "Ppmd7aDec.c",
-        "Ppmd7Enc.c",
-        "Ppmd8.c",
-        "Ppmd8Dec.c",
-        "Ppmd8Enc.c",
-        "Sha1.c",
-        "Sha1Opt.c",
-        "Sha256.c",
-        "Sha256Opt.c",
-        "Sha3.c",
-        "Sha512.c",
-        "Sha512Opt.c",
-        "Sort.c",
-        "SwapBytes.c",
-        "Xxh64.c",
-        "Xz.c",
-        "XzDec.c",
-        "XzEnc.c",
-        "XzIn.c",
-        "XzCrc64.c",
-        "XzCrc64Opt.c",
-        "ZstdDec.c",
-        "LzFindMt.c",
-        "LzFindOpt.c",
-        "Threads.c",
-    };
+    const c_src = Common.core_c_src ++ Common.sfx_c_src ++ Common.codecs_c_src;
 
     const cpp_src = Common.core_cpp_src ++ Common.codecs_cpp_src ++ .{
         "7zip/Archive/ArchiveExports.cpp",
@@ -782,13 +964,8 @@ const Client = struct {
         .{ "Z7_EXTERNAL_CODECS", "" },
     };
 
-    const c_src = .{
-        "7zCrcOpt.c",
-        "7zCrc.c",
+    const c_src = Common.core_c_src ++ .{
         "Sort.c",
-        "CpuArch.c",
-        "Alloc.c",
-        "Threads.c",
     };
 
     const cpp_src = Common.core_cpp_src ++ Common.ui_cpp_src ++ .{
@@ -796,12 +973,66 @@ const Client = struct {
     };
 
     pub const Win = struct {
-        const c_src = .{
-            "DllSecur.c",
-        };
+        const c_src = Common.Win.c_src;
 
         const cpp_src = Common.Win.cpp_src;
 
         const defs = Common.Win.defs;
+    };
+};
+
+const SfxCon = struct {
+    const defs = .{
+        .{ "_FILE_OFFSET_BITS", "64" },
+        .{ "_LARGEFILE_SOURCE", "" },
+        .{ "_REENTRANT", "" },
+        .{ "BREAK_HANDLER", "" },
+        .{ "UNICODE", "" },
+        .{ "_UNICODE", "" },
+        .{ "Z7_EXTRACT_ONLY", "" },
+        .{ "Z7_NO_READ_FROM_CODER", "" },
+        .{ "Z7_SFX", "" },
+        .{ "Z7_NO_LARGE_PAGES", "" },
+    };
+
+    const c_src = Common.core_c_src ++ Common.sfx_c_src;
+
+    const cpp_src = Common.sfx_core_cpp_src ++ Common.ui_extract_cpp_src ++ Common.sfx_codecs_cpp_src ++ .{
+        "7zip/Bundles/SFXCon/SfxCon.cpp",
+    };
+
+    pub const Win = struct {
+        const c_src = Common.Win.c_src;
+
+        const cpp_src = .{
+            "Windows/DLL.cpp",
+        };
+
+        const defs = Common.Win.defs ++ .{
+            .{ "Z7_NO_LONG_PATH", "" },
+        };
+    };
+};
+
+const SfxS2 = struct {
+    const c_src = Common.sfx_s2_core_c_src ++ Common.sfx_s2_dec_c_src ++ .{
+        "7zBuf2.c",
+        "DllSecur.c",
+        "7zAlloc.c",
+        "7zArcIn.c",
+        "7zBuf.c",
+        "7zFile.c",
+        "7zDec.c",
+        "Util/SfxSetup/SfxSetup.c",
+    };
+
+    const defs = .{
+        .{ "UNICODE", "" },
+        .{ "_UNICODE", "" },
+        .{ "Z7_EXTRACT_ONLY", "" },
+    };
+
+    const cflags = .{
+        "-Wno-error=extra-semi-stmt",
     };
 };
