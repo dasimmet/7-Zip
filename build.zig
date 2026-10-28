@@ -20,7 +20,7 @@ pub fn build(b: *std.Build) void {
         .linkage = linkage,
     });
 
-    b.installArtifact(res.sevenzipz);
+    b.installArtifact(res.exe);
     b.installArtifact(res.libsevenzip);
 
     const ci = b.step("ci", "ci target");
@@ -48,7 +48,7 @@ pub fn build(b: *std.Build) void {
             .linkage = linkage,
         });
 
-        const ci_install_z = b.addInstallArtifact(ci_res.sevenzipz, .{
+        const ci_install_z = b.addInstallArtifact(ci_res.exe, .{
             .dest_dir = .{ .override = .{ .custom = target_str ++ "/bin" } },
         });
         ci.dependOn(&ci_install_z.step);
@@ -70,7 +70,7 @@ pub const BuildOptions = struct {
 };
 
 pub const BuildResults = struct {
-    sevenzipz: *std.Build.Step.Compile,
+    exe: *std.Build.Step.Compile,
     libsevenzip: *std.Build.Step.Compile,
 };
 
@@ -84,49 +84,6 @@ pub fn buildOptions(opt: BuildOptions) BuildResults {
         &Common.cflags
     else
         &(Common.cflags ++ Common.ubsan_flags);
-
-    const sevenzipz = blk: {
-        const mod = opt.b.createModule(.{
-            .target = opt.target,
-            .optimize = opt.optimize,
-            .link_libc = true,
-            .link_libcpp = true,
-        });
-
-        mod.addCSourceFiles(.{
-            .root = opt.src.path("C"),
-            .files = &SevenZipZ.c_src,
-            .flags = cflags,
-        });
-
-        mod.addCSourceFiles(.{
-            .root = opt.src.path("CPP"),
-            .files = &SevenZipZ.cpp_src,
-            .flags = cppflags,
-        });
-        inline for (SevenZipZ.defs) |def| {
-            mod.addCMacro(def[0], def[1]);
-        }
-        if (opt.target.result.os.tag == .windows) {
-            mod.addCSourceFiles(.{
-                .root = opt.src.path("CPP"),
-                .files = &SevenZipZ.Win.cpp_src,
-                .flags = cppflags,
-            });
-
-            inline for (SevenZipZ.Win.defs) |def| {
-                mod.addCMacro(def[0], def[1]);
-            }
-            mod.linkSystemLibrary("oleaut32", .{});
-        }
-
-        const exe = opt.b.addExecutable(.{
-            .name = "7zz",
-            .root_module = mod,
-        });
-
-        break :blk exe;
-    };
 
     const libsevenzip = blk: {
         const mod = opt.b.createModule(.{
@@ -172,13 +129,101 @@ pub fn buildOptions(opt: BuildOptions) BuildResults {
             .name = "7z",
             .root_module = mod,
             .linkage = opt.linkage,
+            .win32_module_definition = opt.src.path("CPP/7zip/Archive/Archive2.def"),
         });
 
         break :blk lib;
     };
 
+    const exe = blk: {
+        const mod = opt.b.createModule(.{
+            .target = opt.target,
+            .optimize = opt.optimize,
+            .link_libc = true,
+            .link_libcpp = true,
+        });
+
+        if (opt.linkage == .dynamic) {
+            mod.addCSourceFiles(.{
+                .root = opt.src.path("C"),
+                .files = &Client.c_src,
+                .flags = cflags,
+            });
+
+            mod.addCSourceFiles(.{
+                .root = opt.src.path("CPP"),
+                .files = &Client.cpp_src,
+                .flags = cppflags,
+            });
+            inline for (Client.defs) |def| {
+                mod.addCMacro(def[0], def[1]);
+            }
+            if (opt.target.result.os.tag == .windows) {
+                mod.addCSourceFiles(.{
+                    .root = opt.src.path("C"),
+                    .files = &Client.Win.c_src,
+                    .flags = cflags,
+                });
+
+                mod.addCSourceFiles(.{
+                    .root = opt.src.path("CPP"),
+                    .files = &Client.Win.cpp_src,
+                    .flags = cppflags,
+                });
+
+                inline for (Client.Win.defs) |def| {
+                    mod.addCMacro(def[0], def[1]);
+                }
+                mod.linkSystemLibrary("oleaut32", .{});
+            }
+
+            mod.linkLibrary(libsevenzip);
+
+            const exe = opt.b.addExecutable(.{
+                .name = "7z",
+                .root_module = mod,
+            });
+
+            break :blk exe;
+        } else {
+            mod.addCSourceFiles(.{
+                .root = opt.src.path("C"),
+                .files = &SevenZipZ.c_src,
+                .flags = cflags,
+            });
+
+            mod.addCSourceFiles(.{
+                .root = opt.src.path("CPP"),
+                .files = &SevenZipZ.cpp_src,
+                .flags = cppflags,
+            });
+            inline for (SevenZipZ.defs) |def| {
+                mod.addCMacro(def[0], def[1]);
+            }
+            if (opt.target.result.os.tag == .windows) {
+                mod.addCSourceFiles(.{
+                    .root = opt.src.path("CPP"),
+                    .files = &SevenZipZ.Win.cpp_src,
+                    .flags = cppflags,
+                });
+
+                inline for (SevenZipZ.Win.defs) |def| {
+                    mod.addCMacro(def[0], def[1]);
+                }
+                mod.linkSystemLibrary("oleaut32", .{});
+            }
+
+            const exe = opt.b.addExecutable(.{
+                .name = "7zz",
+                .root_module = mod,
+            });
+
+            break :blk exe;
+        }
+    };
+
     return .{
-        .sevenzipz = sevenzipz,
+        .exe = exe,
         .libsevenzip = libsevenzip,
     };
 }
@@ -881,6 +926,15 @@ const Lib7zip = struct {
 };
 
 const Client = struct {
+    const defs = .{
+        .{ "_FILE_OFFSET_BITS", "64" },
+        .{ "_LARGEFILE_SOURCE", "" },
+        .{ "_REENTRANT", "" },
+        .{ "BREAK_HANDLER", "" },
+        .{ "UNICODE", "" },
+        .{ "_UNICODE", "" },
+    };
+
     const c_src = .{
         "7zCrcOpt.c",
         "7zCrc.c",
@@ -971,5 +1025,21 @@ const Client = struct {
         "7zip/UI/Console/PercentPrinter.cpp",
         "7zip/UI/Console/UpdateCallbackConsole.cpp",
         "7zip/UI/Console/UserInputUtils.cpp",
+    };
+
+    pub const Win = struct {
+        const c_src = .{
+            "DllSecur.c",
+        };
+
+        const cpp_src = .{
+            "Windows/Registry.cpp",
+            "Windows/SecurityUtils.cpp",
+            "Windows/MemoryLock.cpp",
+        };
+
+        const defs = .{
+            .{ "ENV_HAVE_WCTYPE_H", "" },
+        };
     };
 };
