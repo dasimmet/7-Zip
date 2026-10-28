@@ -49,6 +49,7 @@ pub fn build(b: *std.Build) void {
         "x86_64-windows-gnu",
         // "aarch64-windows-gnu",
     }) |target_str| {
+        const ci_wf = b.addWriteFiles();
         for (@as([]const std.builtin.LinkMode, &.{
             .dynamic,
             .static,
@@ -67,31 +68,49 @@ pub fn build(b: *std.Build) void {
                 .linkage = ci_linkage,
             });
 
-            const ci_install_z = b.addInstallArtifact(ci_res.exe, .{
-                .dest_dir = .{ .override = .{ .custom = target_str ++ "/bin" } },
-            });
-            ci.dependOn(&ci_install_z.step);
+            const arc_base = "7z-" ++ target_str;
 
-            const ci_install_lib = b.addInstallArtifact(ci_res.libsevenzip, .{
-                .dest_dir = .{ .override = .{ .custom = b.fmt(
-                    "{s}/{s}",
-                    .{
-                        target_str,
-                        switch (ci_linkage) {
-                            .static => "lib",
-                            .dynamic => "bin",
+            _ = ci_wf.addCopyFile(
+                ci_res.exe.getEmittedBin(),
+                b.fmt("{s}/bin/{s}{s}", .{
+                    arc_base,
+                    ci_res.exe.name,
+                    ci_target.result.exeFileExt(),
+                }),
+            );
+
+            _ = ci_wf.addCopyFile(
+                ci_res.libsevenzip.getEmittedBin(),
+                b.fmt("{s}/{s}/7z{s}", .{
+                    arc_base,
+                    switch (ci_linkage) {
+                        .static => "lib",
+                        .dynamic => "bin",
+                    },
+                    switch (ci_linkage) {
+                        .static => ci_target.result.staticLibSuffix(),
+                        .dynamic => switch (ci_target.result.os.tag) {
+                            .windows => ci_target.result.dynamicLibSuffix(),
+                            else => ".so",
                         },
                     },
-                ) } },
-                .dest_sub_path = switch (ci_linkage) {
-                    .static => null,
-                    .dynamic => switch (ci_target.result.os.tag) {
-                        .windows => null,
-                        else => "7z.so",
-                    },
-                },
-            });
-            ci.dependOn(&ci_install_lib.step);
+                }),
+            );
+
+            const run = b.addRunArtifact(res.exe);
+            run.addArg("a");
+            run.addArg("-tzip");
+
+            const archive = b.addInstallFile(
+                run.addOutputFileArg(
+                    arc_base ++ ".zip",
+                ),
+                arc_base ++ ".zip",
+            );
+
+            run.addDirectoryArg(ci_wf.getDirectory().path(b, arc_base));
+
+            ci.dependOn(&archive.step);
         }
     }
 }
