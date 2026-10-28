@@ -54,7 +54,16 @@ pub fn build(b: *std.Build) void {
         ci.dependOn(&ci_install_z.step);
 
         const ci_install_lib = b.addInstallArtifact(ci_res.libsevenzip, .{
-            .dest_dir = .{ .override = .{ .custom = target_str ++ "/lib" } },
+            .dest_dir = .{ .override = .{ .custom = b.fmt("{s}/{s}", .{
+                target_str,
+                switch (linkage) {
+                    .static => "lib",
+                    .dynamic => switch (ci_target.result.os.tag) {
+                        .windows => "bin",
+                        else => "lib",
+                    },
+                },
+            }) } },
         });
         ci.dependOn(&ci_install_lib.step);
     }
