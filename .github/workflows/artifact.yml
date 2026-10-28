@@ -23,7 +23,12 @@ jobs:
       - name: Run `build`
         run: zig build ci -Doptimize=ReleaseFast
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: 7zip.zip
-          path: zig-out/*
+      - name: Upload files individually
+        run: |
+          for file in ./zig-out/*; do
+            [ -e "$file" ] || continue # Handle empty matches
+            name=$(basename "$file")
+            echo "Processing $name..."
+            # Call your upload or processing command here
+            gh run upload "$GITHUB_RUN_ID" "$file" --name "$name"
+          done
