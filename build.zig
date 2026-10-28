@@ -49,45 +49,50 @@ pub fn build(b: *std.Build) void {
         "x86_64-windows-gnu",
         // "aarch64-windows-gnu",
     }) |target_str| {
-        const parsed_query = std.Build.parseTargetQuery(.{
-            .arch_os_abi = target_str,
-        }) catch @panic("invalid target query: " ++ target_str);
+        for (@as([]const std.builtin.LinkMode, &.{
+            .dynamic,
+            .static,
+        })) |ci_linkage| {
+            const parsed_query = std.Build.parseTargetQuery(.{
+                .arch_os_abi = target_str,
+            }) catch @panic("invalid target query: " ++ target_str);
 
-        const ci_target = b.resolveTargetQuery(parsed_query);
-        const ci_res = buildOptions(.{
-            .b = b,
-            .src = src,
-            .target = ci_target,
-            .optimize = optimize,
-            .ubsan = ubsan,
-            .linkage = linkage,
-        });
+            const ci_target = b.resolveTargetQuery(parsed_query);
+            const ci_res = buildOptions(.{
+                .b = b,
+                .src = src,
+                .target = ci_target,
+                .optimize = optimize,
+                .ubsan = ubsan,
+                .linkage = ci_linkage,
+            });
 
-        const ci_install_z = b.addInstallArtifact(ci_res.exe, .{
-            .dest_dir = .{ .override = .{ .custom = target_str ++ "/bin" } },
-        });
-        ci.dependOn(&ci_install_z.step);
+            const ci_install_z = b.addInstallArtifact(ci_res.exe, .{
+                .dest_dir = .{ .override = .{ .custom = target_str ++ "/bin" } },
+            });
+            ci.dependOn(&ci_install_z.step);
 
-        const ci_install_lib = b.addInstallArtifact(ci_res.libsevenzip, .{
-            .dest_dir = .{ .override = .{ .custom = b.fmt(
-                "{s}/{s}",
-                .{
-                    target_str,
-                    switch (linkage) {
-                        .static => "lib",
-                        .dynamic => "bin",
+            const ci_install_lib = b.addInstallArtifact(ci_res.libsevenzip, .{
+                .dest_dir = .{ .override = .{ .custom = b.fmt(
+                    "{s}/{s}",
+                    .{
+                        target_str,
+                        switch (ci_linkage) {
+                            .static => "lib",
+                            .dynamic => "bin",
+                        },
+                    },
+                ) } },
+                .dest_sub_path = switch (ci_linkage) {
+                    .static => null,
+                    .dynamic => switch (ci_target.result.os.tag) {
+                        .windows => null,
+                        else => "7z.so",
                     },
                 },
-            ) } },
-            .dest_sub_path = switch (linkage) {
-                .static => null,
-                .dynamic => switch (ci_target.result.os.tag) {
-                    .windows => null,
-                    else => "7z.so",
-                },
-            },
-        });
-        ci.dependOn(&ci_install_lib.step);
+            });
+            ci.dependOn(&ci_install_lib.step);
+        }
     }
 }
 
