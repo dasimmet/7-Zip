@@ -21,7 +21,22 @@ pub fn build(b: *std.Build) void {
     });
 
     b.installArtifact(res.exe);
-    b.installArtifact(res.libsevenzip);
+
+    // override install lib dir to bin for windows-style dlopen to work
+    const install_so = b.addInstallArtifact(res.libsevenzip, .{
+        .dest_dir = .{ .override = switch (linkage) {
+            .dynamic => .bin,
+            .static => .lib,
+        } },
+        .dest_sub_path = switch (linkage) {
+            .static => null,
+            .dynamic => switch (target.result.os.tag) {
+                .windows => null,
+                else => "7z.so",
+            },
+        },
+    });
+    b.getInstallStep().dependOn(&install_so.step);
 
     const ci = b.step("ci", "ci target");
     inline for (&.{
@@ -54,16 +69,23 @@ pub fn build(b: *std.Build) void {
         ci.dependOn(&ci_install_z.step);
 
         const ci_install_lib = b.addInstallArtifact(ci_res.libsevenzip, .{
-            .dest_dir = .{ .override = .{ .custom = b.fmt("{s}/{s}", .{
-                target_str,
-                switch (linkage) {
-                    .static => "lib",
-                    .dynamic => switch (ci_target.result.os.tag) {
-                        .windows => "bin",
-                        else => "lib",
+            .dest_dir = .{ .override = .{ .custom = b.fmt(
+                "{s}/{s}",
+                .{
+                    target_str,
+                    switch (linkage) {
+                        .static => "lib",
+                        .dynamic => "bin",
                     },
                 },
-            }) } },
+            ) } },
+            .dest_sub_path = switch (linkage) {
+                .static => null,
+                .dynamic => switch (ci_target.result.os.tag) {
+                    .windows => null,
+                    else => "7z.so",
+                },
+            },
         });
         ci.dependOn(&ci_install_lib.step);
     }
@@ -186,12 +208,11 @@ pub fn buildOptions(opt: BuildOptions) BuildResults {
                 mod.linkSystemLibrary("oleaut32", .{});
             }
 
-            mod.linkLibrary(libsevenzip);
-
             const exe = opt.b.addExecutable(.{
                 .name = "7z",
                 .root_module = mod,
             });
+            exe.step.dependOn(&libsevenzip.step);
 
             break :blk exe;
         } else {
@@ -942,6 +963,7 @@ const Client = struct {
         .{ "BREAK_HANDLER", "" },
         .{ "UNICODE", "" },
         .{ "_UNICODE", "" },
+        .{ "Z7_EXTERNAL_CODECS", "" },
     };
 
     const c_src = .{
