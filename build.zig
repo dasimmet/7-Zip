@@ -46,12 +46,16 @@ pub fn build(b: *std.Build) void {
     });
     b.getInstallStep().dependOn(&install_sfx_con.step);
 
+    const sfx = b.step("sfx", "build sfx modules");
+    sfx.dependOn(&install_sfx_con.step);
+
     if (res.sfx_s2) |s2| {
         const install_s2 = b.addInstallArtifact(s2, .{
             .dest_dir = .{ .override = .bin },
             .dest_sub_path = "7zS2.sfx",
         });
         b.getInstallStep().dependOn(&install_s2.step);
+        sfx.dependOn(&install_s2.step);
     }
 
     if (res.sfx_s2con) |s2con| {
@@ -60,10 +64,30 @@ pub fn build(b: *std.Build) void {
             .dest_sub_path = "7zS2con.sfx",
         });
         b.getInstallStep().dependOn(&install_s2con.step);
+        sfx.dependOn(&install_s2con.step);
     }
 
-    const sfx = b.step("sfx", "build sfx modules");
-    sfx.dependOn(&install_sfx_con.step);
+    const gui_step = b.step("gui", "build GUI");
+    if (res.gui) |gui| {
+        const install_gui = b.addInstallArtifact(gui, .{
+            .dest_dir = .{ .override = .bin },
+            .dest_sub_path = "7zG.exe",
+        });
+        b.getInstallStep().dependOn(&install_gui.step);
+        gui_step.dependOn(&install_gui.step);
+    }
+
+    const fm_step = b.step("fm", "build File Manager");
+    const filemanager_step = b.step("filemanager", "build File Manager");
+    if (res.fm) |fm| {
+        const install_fm = b.addInstallArtifact(fm, .{
+            .dest_dir = .{ .override = .bin },
+            .dest_sub_path = "7zFM.exe",
+        });
+        b.getInstallStep().dependOn(&install_fm.step);
+        fm_step.dependOn(&install_fm.step);
+        filemanager_step.dependOn(&install_fm.step);
+    }
 
     const ci = b.step("ci", "ci target");
     inline for (&.{
@@ -143,6 +167,20 @@ pub fn build(b: *std.Build) void {
                 );
             }
 
+            if (ci_res.gui) |gui| {
+                _ = ci_wf.addCopyFile(
+                    gui.getEmittedBin(),
+                    b.fmt("{s}/bin/7zG.exe", .{arc_base}),
+                );
+            }
+
+            if (ci_res.fm) |fm| {
+                _ = ci_wf.addCopyFile(
+                    fm.getEmittedBin(),
+                    b.fmt("{s}/bin/7zFM.exe", .{arc_base}),
+                );
+            }
+
             const run = b.addRunArtifact(res.exe);
             run.addArg("a");
             run.addArg("-tzip");
@@ -177,6 +215,8 @@ pub const BuildResults = struct {
     sfx_con: *std.Build.Step.Compile,
     sfx_s2: ?*std.Build.Step.Compile = null,
     sfx_s2con: ?*std.Build.Step.Compile = null,
+    gui: ?*std.Build.Step.Compile = null,
+    fm: ?*std.Build.Step.Compile = null,
 };
 
 pub fn buildOptions(opt: BuildOptions) BuildResults {
@@ -457,12 +497,149 @@ pub fn buildOptions(opt: BuildOptions) BuildResults {
         break :blk s2con_exe;
     } else null;
 
+    const win_headers = if (opt.target.result.os.tag == .windows) blk: {
+        const wf = opt.b.addWriteFiles();
+        inline for (&.{
+            .{ "CommCtrl.h", "commctrl.h" },
+            .{ "HtmlHelp.h", "htmlhelp.h" },
+            .{ "MAPI.h", "mapi.h" },
+            .{ "NTSecAPI.h", "ntsecapi.h" },
+            .{ "OleCtl.h", "olectl.h" },
+            .{ "Psapi.h", "psapi.h" },
+            .{ "ShObjIdl.h", "shobjidl.h" },
+            .{ "ShlGuid.h", "shlguid.h" },
+            .{ "ShlObj.h", "shlobj.h" },
+            .{ "Shlwapi.h", "shlwapi.h" },
+            .{ "TlHelp32.h", "tlhelp32.h" },
+        }) |h| {
+            _ = wf.add(h[0], "#pragma once\n#include <" ++ h[1] ++ ">\n");
+        }
+        break :blk wf;
+    } else null;
+
+    const gui = if (opt.target.result.os.tag == .windows) blk: {
+        const mod = opt.b.createModule(.{
+            .target = opt.target,
+            .optimize = opt.optimize,
+            .link_libc = true,
+            .link_libcpp = true,
+            .strip = opt.strip,
+        });
+
+        mod.addIncludePath(win_headers.?.getDirectory());
+
+        mod.addCSourceFiles(.{
+            .root = opt.src.path("C"),
+            .files = &Gui.c_src,
+            .flags = cflags,
+        });
+
+        mod.addCSourceFiles(.{
+            .root = opt.src.path("CPP"),
+            .files = &Gui.cpp_src,
+            .flags = cppflags,
+        });
+
+        inline for (Gui.defs) |def| {
+            mod.addCMacro(def[0], def[1]);
+        }
+
+        mod.addWin32ResourceFile(.{
+            .file = opt.src.path("CPP/7zip/UI/GUI/resource.rc"),
+            .include_paths = &.{
+                win_headers.?.getDirectory(),
+                opt.src.path("CPP"),
+                opt.src.path("CPP/7zip/UI/GUI"),
+                opt.src.path("CPP/7zip/UI/FileManager"),
+            },
+        });
+
+        mod.linkSystemLibrary("comctl32", .{});
+        mod.linkSystemLibrary("comdlg32", .{});
+        mod.linkSystemLibrary("gdi32", .{});
+        mod.linkSystemLibrary("htmlhelp", .{});
+        mod.linkSystemLibrary("ole32", .{});
+        mod.linkSystemLibrary("oleaut32", .{});
+        mod.linkSystemLibrary("shell32", .{});
+        mod.linkSystemLibrary("uuid", .{});
+
+        const gui_exe = opt.b.addExecutable(.{
+            .name = "7zG",
+            .root_module = mod,
+        });
+        gui_exe.subsystem = .windows;
+        if (opt.linkage == .dynamic) {
+            gui_exe.step.dependOn(&libsevenzip.step);
+        }
+
+        break :blk gui_exe;
+    } else null;
+
+    const fm = if (opt.target.result.os.tag == .windows) blk: {
+        const mod = opt.b.createModule(.{
+            .target = opt.target,
+            .optimize = opt.optimize,
+            .link_libc = true,
+            .link_libcpp = true,
+            .strip = opt.strip,
+        });
+
+        mod.addIncludePath(win_headers.?.getDirectory());
+
+        mod.addCSourceFiles(.{
+            .root = opt.src.path("C"),
+            .files = &Fm.c_src,
+            .flags = cflags,
+        });
+
+        mod.addCSourceFiles(.{
+            .root = opt.src.path("CPP"),
+            .files = &Fm.cpp_src,
+            .flags = cppflags,
+        });
+
+        inline for (Fm.defs) |def| {
+            mod.addCMacro(def[0], def[1]);
+        }
+
+        mod.addWin32ResourceFile(.{
+            .file = opt.src.path("CPP/7zip/Bundles/Fm/resource.rc"),
+            .include_paths = &.{
+                win_headers.?.getDirectory(),
+                opt.src.path("CPP"),
+                opt.src.path("CPP/7zip/Bundles/Fm"),
+                opt.src.path("CPP/7zip/UI/FileManager"),
+                opt.src.path("CPP/7zip/UI/GUI"),
+            },
+        });
+
+        mod.linkSystemLibrary("comctl32", .{});
+        mod.linkSystemLibrary("comdlg32", .{});
+        mod.linkSystemLibrary("gdi32", .{});
+        mod.linkSystemLibrary("htmlhelp", .{});
+        mod.linkSystemLibrary("mpr", .{});
+        mod.linkSystemLibrary("ole32", .{});
+        mod.linkSystemLibrary("oleaut32", .{});
+        mod.linkSystemLibrary("shell32", .{});
+        mod.linkSystemLibrary("uuid", .{});
+
+        const fm_exe = opt.b.addExecutable(.{
+            .name = "7zFM",
+            .root_module = mod,
+        });
+        fm_exe.subsystem = .windows;
+
+        break :blk fm_exe;
+    } else null;
+
     return .{
         .exe = exe,
         .libsevenzip = libsevenzip,
         .sfx_con = sfx_con,
         .sfx_s2 = sfx_s2,
         .sfx_s2con = sfx_s2con,
+        .gui = gui,
+        .fm = fm,
     };
 }
 
@@ -489,6 +666,7 @@ const Common = struct {
         "-Wno-missing-prototypes",
         "-Wno-strict-prototypes",
         "-Wno-unused-macros",
+        "-Wno-error=undef",
     };
 
     const sfx_s2_core_c_src = .{
@@ -634,11 +812,14 @@ const Common = struct {
 
     const codecs_common_cpp_src = sfx_codecs_common_cpp_src ++ codecs_common_extra_cpp_src;
 
-    const sfx_archive_cpp_src = .{
+    const out_stream_with_crc_cpp_src = .{
+        "7zip/Archive/Common/OutStreamWithCRC.cpp",
+    };
+
+    const sfx_archive_cpp_src = out_stream_with_crc_cpp_src ++ .{
         "7zip/Archive/SplitHandler.cpp",
         "7zip/Archive/Common/CoderMixer2.cpp",
         "7zip/Archive/Common/MultiStream.cpp",
-        "7zip/Archive/Common/OutStreamWithCRC.cpp",
         "7zip/Archive/7z/7zDecode.cpp",
         "7zip/Archive/7z/7zExtract.cpp",
         "7zip/Archive/7z/7zHandler.cpp",
@@ -831,10 +1012,8 @@ const Common = struct {
 
     const codecs_cpp_src = codecs_common_cpp_src ++ archive_cpp_src ++ compress_cpp_src ++ crypto_cpp_src;
 
-    const ui_extract_cpp_src = .{
+    const ui_common_extract_cpp_src = .{
         "Common/CommandLineParser.cpp",
-        "Common/StdInStream.cpp",
-        "Common/StdOutStream.cpp",
         "Windows/ErrorMsg.cpp",
         "7zip/Common/FilePathAutoRename.cpp",
         "7zip/Common/FileStreams.cpp",
@@ -846,6 +1025,11 @@ const Common = struct {
         "7zip/UI/Common/LoadCodecs.cpp",
         "7zip/UI/Common/OpenArchive.cpp",
         "7zip/UI/Common/PropIDUtils.cpp",
+    };
+
+    const ui_console_extract_cpp_src = .{
+        "Common/StdInStream.cpp",
+        "Common/StdOutStream.cpp",
         "7zip/UI/Console/ConsoleClose.cpp",
         "7zip/UI/Console/ExtractCallbackConsole.cpp",
         "7zip/UI/Console/List.cpp",
@@ -855,12 +1039,13 @@ const Common = struct {
         "7zip/UI/Console/UserInputUtils.cpp",
     };
 
-    const ui_extra_cpp_src = .{
+    const ui_extract_cpp_src = ui_common_extract_cpp_src ++ ui_console_extract_cpp_src;
+
+    const ui_common_extra_cpp_src = .{
         "Common/ListFileUtils.cpp",
         "Windows/FileLink.cpp",
         "Windows/SystemInfo.cpp",
         "7zip/Common/MultiOutStream.cpp",
-        "7zip/UI/Common/ArchiveCommandLine.cpp",
         "7zip/UI/Common/Bench.cpp",
         "7zip/UI/Common/EnumDirItems.cpp",
         "7zip/UI/Common/HashCalc.cpp",
@@ -872,13 +1057,138 @@ const Common = struct {
         "7zip/UI/Common/UpdateCallback.cpp",
         "7zip/UI/Common/UpdatePair.cpp",
         "7zip/UI/Common/UpdateProduce.cpp",
+    };
+
+    const ui_cmdline_cpp_src = .{
+        "7zip/UI/Common/ArchiveCommandLine.cpp",
+    };
+
+    const ui_console_extra_cpp_src = .{
         "7zip/UI/Console/BenchCon.cpp",
         "7zip/UI/Console/HashCon.cpp",
         "7zip/UI/Console/Main.cpp",
         "7zip/UI/Console/UpdateCallbackConsole.cpp",
     };
 
+    const ui_extra_cpp_src = ui_common_extra_cpp_src ++ ui_cmdline_cpp_src ++ ui_console_extra_cpp_src;
+
     const ui_cpp_src = ui_extract_cpp_src ++ ui_extra_cpp_src;
+    const ui_common_cpp_src = ui_common_extract_cpp_src ++ ui_common_extra_cpp_src;
+
+    const dll_cpp_src = .{
+        "Windows/DLL.cpp",
+    };
+
+    const resource_string_cpp_src = .{
+        "Windows/ResourceString.cpp",
+    };
+
+    const gui_shared_cpp_src = .{
+        "7zip/UI/GUI/BenchmarkDialog.cpp",
+        "7zip/UI/GUI/CompressDialog.cpp",
+        "7zip/UI/GUI/ExtractDialog.cpp",
+        "7zip/UI/GUI/ExtractGUI.cpp",
+        "7zip/UI/GUI/HashGUI.cpp",
+        "7zip/UI/GUI/UpdateCallbackGUI.cpp",
+        "7zip/UI/GUI/UpdateCallbackGUI2.cpp",
+        "7zip/UI/GUI/UpdateGUI.cpp",
+        "Common/Lang.cpp",
+        "Windows/Clipboard.cpp",
+        "Windows/CommonDialog.cpp",
+        "Windows/FileSystem.cpp",
+        "Windows/MemoryGlobal.cpp",
+        "Windows/Shell.cpp",
+        "Windows/Window.cpp",
+        "Windows/Control/ComboBox.cpp",
+        "Windows/Control/Dialog.cpp",
+        "Windows/Control/ListView.cpp",
+        "7zip/UI/Common/WorkDir.cpp",
+        "7zip/UI/Common/ZipRegistry.cpp",
+        "7zip/UI/FileManager/EditDialog.cpp",
+        "7zip/UI/FileManager/ExtractCallback.cpp",
+        "7zip/UI/FileManager/FormatUtils.cpp",
+        "7zip/UI/FileManager/HelpUtils.cpp",
+        "7zip/UI/FileManager/LangUtils.cpp",
+        "7zip/UI/FileManager/ListViewDialog.cpp",
+        "7zip/UI/FileManager/MemDialog.cpp",
+        "7zip/UI/FileManager/OpenCallback.cpp",
+        "7zip/UI/FileManager/ProgramLocation.cpp",
+        "7zip/UI/FileManager/PropertyName.cpp",
+        "7zip/UI/FileManager/RegistryUtils.cpp",
+        "7zip/UI/FileManager/SplitUtils.cpp",
+        "7zip/UI/FileManager/StringUtils.cpp",
+        "7zip/UI/FileManager/OverwriteDialog.cpp",
+        "7zip/UI/FileManager/PasswordDialog.cpp",
+        "7zip/UI/FileManager/ProgressDialog2.cpp",
+        "7zip/UI/FileManager/BrowseDialog.cpp",
+        "7zip/UI/FileManager/ComboDialog.cpp",
+        "7zip/UI/FileManager/SysIconUtils.cpp",
+        "7zip/UI/Explorer/MyMessages.cpp",
+    };
+
+    const fm_specific_cpp_src = .{
+        "7zip/UI/FileManager/App.cpp",
+        "7zip/UI/FileManager/BrowseDialog2.cpp",
+        "7zip/UI/FileManager/ClassDefs.cpp",
+        "7zip/UI/FileManager/EnumFormatEtc.cpp",
+        "7zip/UI/FileManager/FileFolderPluginOpen.cpp",
+        "7zip/UI/FileManager/FilePlugins.cpp",
+        "7zip/UI/FileManager/FoldersPage.cpp",
+        "7zip/UI/FileManager/FSFolder.cpp",
+        "7zip/UI/FileManager/FSFolderCopy.cpp",
+        "7zip/UI/FileManager/MenuPage.cpp",
+        "7zip/UI/FileManager/MyLoadMenu.cpp",
+        "7zip/UI/FileManager/OptionsDialog.cpp",
+        "7zip/UI/FileManager/Panel.cpp",
+        "7zip/UI/FileManager/PanelCopy.cpp",
+        "7zip/UI/FileManager/PanelCrc.cpp",
+        "7zip/UI/FileManager/PanelDrag.cpp",
+        "7zip/UI/FileManager/PanelFolderChange.cpp",
+        "7zip/UI/FileManager/PanelItemOpen.cpp",
+        "7zip/UI/FileManager/PanelItems.cpp",
+        "7zip/UI/FileManager/PanelKey.cpp",
+        "7zip/UI/FileManager/PanelListNotify.cpp",
+        "7zip/UI/FileManager/PanelMenu.cpp",
+        "7zip/UI/FileManager/PanelOperations.cpp",
+        "7zip/UI/FileManager/PanelSelect.cpp",
+        "7zip/UI/FileManager/PanelSort.cpp",
+        "7zip/UI/FileManager/PanelSplitFile.cpp",
+        "7zip/UI/FileManager/RegistryAssociations.cpp",
+        "7zip/UI/FileManager/RootFolder.cpp",
+        "7zip/UI/FileManager/TextPairs.cpp",
+        "7zip/UI/FileManager/UpdateCallback100.cpp",
+        "7zip/UI/FileManager/ViewSettings.cpp",
+        "7zip/UI/FileManager/AboutDialog.cpp",
+        "7zip/UI/FileManager/CopyDialog.cpp",
+        "7zip/UI/FileManager/EditPage.cpp",
+        "7zip/UI/FileManager/LangPage.cpp",
+        "7zip/UI/FileManager/MessagesDialog.cpp",
+        "7zip/UI/FileManager/SettingsPage.cpp",
+        "7zip/UI/FileManager/SplitDialog.cpp",
+        "7zip/UI/FileManager/SystemPage.cpp",
+        "7zip/UI/FileManager/VerCtrl.cpp",
+        "7zip/UI/FileManager/AltStreamsFolder.cpp",
+        "7zip/UI/FileManager/FSDrives.cpp",
+        "7zip/UI/FileManager/LinkDialog.cpp",
+        "7zip/UI/FileManager/NetFolder.cpp",
+        "Windows/Control/PropertyPage.cpp",
+        "Windows/Control/Window2.cpp",
+        "Windows/Menu.cpp",
+        "Windows/Net.cpp",
+        "Windows/ProcessUtils.cpp",
+        "7zip/UI/Agent/Agent.cpp",
+        "7zip/UI/Agent/AgentOut.cpp",
+        "7zip/UI/Agent/AgentProxy.cpp",
+        "7zip/UI/Agent/ArchiveFolder.cpp",
+        "7zip/UI/Agent/ArchiveFolderOpen.cpp",
+        "7zip/UI/Agent/ArchiveFolderOut.cpp",
+        "7zip/UI/Agent/UpdateCallbackAgent.cpp",
+        "7zip/UI/Explorer/ContextMenu.cpp",
+        "7zip/UI/Explorer/RegistryContextMenu.cpp",
+        "7zip/UI/Common/ArchiveName.cpp",
+        "7zip/UI/Common/CompressCall2.cpp",
+        "Common/Random.cpp",
+    };
 
     pub const Win = struct {
         const c_src = .{
@@ -890,6 +1200,8 @@ const Common = struct {
             "Windows/SecurityUtils.cpp",
             "Windows/MemoryLock.cpp",
         };
+
+        const extra_cpp_src = dll_cpp_src ++ resource_string_cpp_src;
 
         const defs = .{
             .{ "ENV_HAVE_WCTYPE_H", "" },
@@ -915,11 +1227,7 @@ const SevenZipZ = struct {
     const cpp_src = Common.core_cpp_src ++ Common.codecs_cpp_src ++ Common.ui_cpp_src;
 
     pub const Win = struct {
-        const cpp_src = Common.Win.cpp_src ++ .{
-            "Windows/DLL.cpp",
-            "Windows/System.cpp",
-            "Windows/ResourceString.cpp",
-        };
+        const cpp_src = Common.Win.cpp_src ++ Common.Win.extra_cpp_src;
 
         const defs = Common.Win.defs;
     };
@@ -968,9 +1276,7 @@ const Client = struct {
         "Sort.c",
     };
 
-    const cpp_src = Common.core_cpp_src ++ Common.ui_cpp_src ++ .{
-        "Windows/DLL.cpp",
-    };
+    const cpp_src = Common.core_cpp_src ++ Common.ui_cpp_src ++ Common.dll_cpp_src;
 
     pub const Win = struct {
         const c_src = Common.Win.c_src;
@@ -1004,9 +1310,7 @@ const SfxCon = struct {
     pub const Win = struct {
         const c_src = Common.Win.c_src;
 
-        const cpp_src = .{
-            "Windows/DLL.cpp",
-        };
+        const cpp_src = Common.dll_cpp_src;
 
         const defs = Common.Win.defs ++ .{
             .{ "Z7_NO_LONG_PATH", "" },
@@ -1034,5 +1338,31 @@ const SfxS2 = struct {
 
     const cflags = .{
         "-Wno-error=extra-semi-stmt",
+    };
+};
+
+const Gui = struct {
+    const defs = Client.defs ++ Common.Win.defs ++ .{
+        .{ "Z7_LANG", "" },
+        .{ "Z7_DEVICE_FILE", "" },
+    };
+
+    const c_src = Client.c_src ++ Client.Win.c_src;
+
+    const cpp_src = Common.core_cpp_src ++ Common.ui_common_cpp_src ++ Common.ui_cmdline_cpp_src ++ Common.gui_shared_cpp_src ++ Common.Win.cpp_src ++ Common.Win.extra_cpp_src ++ Common.out_stream_with_crc_cpp_src ++ .{
+        "7zip/UI/GUI/GUI.cpp",
+    };
+};
+
+const Fm = struct {
+    const defs = SevenZipZ.defs ++ Common.Win.defs ++ .{
+        .{ "Z7_LANG", "" },
+        .{ "Z7_DEVICE_FILE", "" },
+    };
+
+    const c_src = SevenZipZ.c_src;
+
+    const cpp_src = Common.core_cpp_src ++ Common.codecs_cpp_src ++ Common.ui_common_cpp_src ++ Common.gui_shared_cpp_src ++ Common.fm_specific_cpp_src ++ Common.Win.cpp_src ++ Common.Win.extra_cpp_src ++ .{
+        "7zip/UI/FileManager/FM.cpp",
     };
 };
