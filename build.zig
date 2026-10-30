@@ -427,9 +427,9 @@ pub fn buildOptions(opt: BuildOptions) BuildResults {
 
     const sfx_s2 = if (opt.target.result.os.tag == .windows) blk: {
         const s2_cflags: []const []const u8 = if (opt.ubsan)
-            &(Common.cflags ++ Common.ubsan_flags ++ SfxS2.cflags)
+            &(Common.cflags ++ SfxS2.cflags)
         else
-            &(Common.cflags ++ SfxS2.cflags);
+            &(Common.cflags ++ Common.ubsan_flags ++ SfxS2.cflags);
 
         const mod = opt.b.createModule(.{
             .target = opt.target,
@@ -463,9 +463,9 @@ pub fn buildOptions(opt: BuildOptions) BuildResults {
 
     const sfx_s2con = if (opt.target.result.os.tag == .windows) blk: {
         const s2_cflags: []const []const u8 = if (opt.ubsan)
-            &(Common.cflags ++ Common.ubsan_flags ++ SfxS2.cflags)
+            &(Common.cflags ++ SfxS2.cflags)
         else
-            &(Common.cflags ++ SfxS2.cflags);
+            &(Common.cflags ++ Common.ubsan_flags ++ SfxS2.cflags);
 
         const mod = opt.b.createModule(.{
             .target = opt.target,
@@ -645,7 +645,8 @@ pub fn buildOptions(opt: BuildOptions) BuildResults {
 
 const Common = struct {
     const ubsan_flags = .{
-        "-fno-sanitize=alignment,integer",
+        "-fno-sanitize=undefined",
+        "-fno-sanitize=integer",
     };
 
     const cflags = commonflags;
